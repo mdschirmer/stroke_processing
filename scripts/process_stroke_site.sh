@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 
 site=$1
+subjectlist=$2
 DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 
 source $DIR/../stroke.cfg 2>/dev/null
-subjectlist=${site_subject_lists}/site${site}.txt
-export PYTHONPATH=${pipebuilder_path}:$DIR/../:$PYTHONPATH
-echo $subjectlist
 
-cat $subjectlist | while read subj; do
+export PYTHONPATH=${pipebuilder_path}:$DIR/../:$PYTHONPATH
+
+for subj in $subjectlist; do
     echo $subj
-    python $DIR/../stroke_processing/registration/flairpipe.py $subj 9.0 0.2 2015_02_04/site${site}/
+    python $DIR/../stroke_processing/registration/flairpipe.py ${subj} 9.0 0.2 ${processing_root}/data/${site}/
 done

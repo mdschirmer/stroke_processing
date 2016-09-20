@@ -60,6 +60,7 @@ if __name__ == '__main__':
     #############################
 
     BASE = os.path.join(PROCESSING_ROOT, data_subfolder)
+    print(BASE)
     ## Atlas
 
     atlas = pb.Dataset(ATLAS_BASE, 'flairTemplateInBuckner_sigma{kernel}{extension}', None)
@@ -79,7 +80,7 @@ if __name__ == '__main__':
     #dataset.add_mandatory_input(modality='t1', feature='raw')
     #dataset.add_mandatory_input(modality='flair', feature='img')
     dataset.add_mandatory_input(modality='flair', feature='raw')
-    dataset.get_original(subj=subj, modality='t1', feature='raw')
+    #dataset.get_original(subj=subj, modality='t1', feature='raw')
 
     #############################
     ### Registration pipeline ###
@@ -87,13 +88,22 @@ if __name__ == '__main__':
 
     ###
     flair_input = dataset.get_original(subj=subj, modality='flair', feature='raw')
-    dwi_input = dataset.get_original(subj=subj, modality='dwi', feature='raw')
-    modifiers = '_prep_pad'
-    first_step = pb.NiiToolsPadCommand(
-                 "Pad flair by convention",
-                 #cmdName=os.path.join(cwd, 'strip_header.py'),
+    sigma = 8
+    atlas_img = atlas.get_original(kernel=sigma)
+
+
+    modifiers = '_upsample'
+    upsample = pb.NiiToolsUpsampleCommand(
+                 "Upsample flair image",
                  input=flair_input,
                  output=dataset.get(subj=subj, modality='flair', feature='img', modifiers=modifiers),
+                 )
+
+    padding = pb.NiiToolsPadCommand(
+                 "Pad flair by convention",
+                 #cmdName=os.path.join(cwd, 'strip_header.py'),
+                 input=dataset.get(subj=subj, modality='flair', feature='img', modifiers=modifiers),
+                 output=dataset.get(subj=subj, modality='flair', feature='img', modifiers=modifiers + '_prep_pad'),
                  outmask=dataset.get(subj=subj, modality='flair', feature='img', modifiers=modifiers + '_mask_seg'),
                  )
 
@@ -113,12 +123,6 @@ if __name__ == '__main__':
             )
 
     modifiers += '_brain'
-    # intensity_corr = pb.MCCMatchWMCommand(
-    #         "Intensity correction for flair image",
-    #         inFile=dataset.get(subj=subj, modality='flair', feature='img', modifiers=modifiers),
-    #         maskFile=mask,
-    #         intensity=FLAIR_INTENSITY,
-    #         output=dataset.get(subj=subj, modality='flair', feature='img', modifiers=modifiers + '_matchwm'))
     intensity_corr = pb.NiiToolsMatchIntensityCommand(
             "Intensity correction for flair image",
             inFile=dataset.get(subj=subj, modality='flair', feature='img', modifiers=modifiers),
@@ -128,149 +132,60 @@ if __name__ == '__main__':
             )
 
     modifiers += '_matchwm'
-
-
     subj_final_img = dataset.get(subj=subj, modality='flair', feature='img', modifiers=modifiers)
 
-    dwi_mask = dataset.get(subj=subj, modality='flair', feature='mask', modifiers='_from_flair')
-    for sigma in [8]:
-        atlas_img = atlas.get_original(kernel=sigma)
-        basic_threshold_segmentation_wmh = dataset.get(subj=subj, modality='flair', feature='wmh_raw_threshold_seg', modifiers='')
-        basic_threshold_segmentation_stroke = dataset.get(subj=subj, modality='flair', feature='wmh_raw_threshold_seg', modifiers='')
-        multimodal_registration = pb.ANTSCommand("Rigidly register DWI to FLAIR",
-                moving=dwi_input,
-                fixed=subj_final_img,
-                output_folder=os.path.join(dataset.get_folder(subj=subj), 'reg'),
-                metric='MI',
-                radiusBins=32,
-                mask=mask,
-                method='rigid',
-                )
-        pb.ANTSWarpCommand.make_from_registration(
-                "Warp mask to DWI",
-                moving=mask,
-                reference=dwi_input,
-                output_filename=dwi_mask,
-                registration=multimodal_registration,
-                inversion='forward'
-                )
+    downsampled_final_image = pb.NiiToolsDownsampleCommand(
+             "Downsample final flair image",
+             input=subj_final_img,
+             output=dataset.get(subj=subj, modality='flair', feature='pipeline', modifiers='')
+             )
 
-        ###### Final atlas -> subject registration
-        forward_reg = pb.ANTSCommand(
-                "Register label-blurred flair atlas  to subject",
-                moving=atlas_img,
-                fixed=subj_final_img,
-                output_folder=os.path.join(dataset.get_folder(subj=subj), 'reg'),
-                metric='CC',
-                radiusBins=4,
-                mask=mask,
-                regularization='Gauss[%0.3f,%0.3f]' % (regularization,regularization2),
-                method='201x201x201',
-                )
+    ###### Final atlas -> subject registration
+    forward_reg = pb.ANTSCommand(
+            "Register label-blurred flair atlas  to subject",
+            moving=atlas_img,
+            fixed=subj_final_img,
+            output_folder=os.path.join(dataset.get_folder(subj=subj), 'reg'),
+            metric='CC',
+            radiusBins=4,
+            mask=mask,
+            regularization='Gauss[%0.3f,%0.3f]' % (regularization,regularization2),
+            method='201x201x201',
+            )
 
-        pb.ANTSWarpCommand.make_from_registration(
-                "Warp subject image to atlas space using  warp",
-                moving=subj_final_img,
-                reference=atlas_img,
-                output_filename=dataset.get(subj=subj, modality='flair', feature='img', modifiers='_in_atlas'),
-                registration=forward_reg,
-                inversion='inverse',
-                )
+    pb.ANTSWarpCommand.make_from_registration(
+            "Warp subject image to atlas space using  warp",
+            moving=subj_final_img,
+            reference=atlas_img,
+            output_filename=dataset.get(subj=subj, modality='flair', feature='img', modifiers='_in_atlas'),
+            registration=forward_reg,
+            inversion='inverse',
+            )
 
-        label_warp = pb.ANTSWarpCommand.make_from_registration(
-                "Warp atlas labels to subject space using  warp",
-                moving=buckner.get_original(feature='_seg'),
-                reference=subj_final_img,
-                registration=forward_reg,
-                useNN=True,
-                )
-        dwi_seg = dataset.get(subj=subj, modality='dwi', feature='seg', modifiers='')
-        dwi_is_dwi = dataset.get(subj=subj, modality='dwi', feature='verified', modifiers='', extension='.txt')
-        label_warp_dwi = pb.ANTSWarpCommand.make_from_registration_sequence(
-                "Warp atlas labels to dwi",
-                moving=buckner.get_original(feature='_seg'),
-                reference=dwi_input,
-                output_filename=dwi_seg,
-                reg_sequence=[forward_reg, multimodal_registration],
-                inversion_sequence=['forward', 'inverse'],
-                useNN=True,
-                )
-        # TODO finish this: in-progress way of making sure modality is right
-        # pb.PyFunctionCommand(
-        #         "Verify ventricles greater than white matter",
-        #         function="flairpipe.check_fluid_attenuation",
-        #         args=[
-        #             dwi_input,
-        #             dwi_seg,
-        #             dwi_is_dwi
-        #             ],
-        #         output_positions=[2])
+    label_warp = pb.ANTSWarpCommand.make_from_registration(
+            "Warp atlas labels to subject space using  warp",
+            moving=buckner.get_original(feature='_seg'),
+            reference=subj_final_img,
+            registration=forward_reg,
+            output_filename=dataset.get(subj=subj, modality='flair', feature='atlas_labels', modifiers='_in_subject_seg'),
+            useNN=True,
+            )
 
-        dwi_matchwm = dataset.get(subj=subj, modality='dwi', feature='img', modifiers='_matchwm')
-        intensity_corr_dwi = pb.NiiToolsMatchIntensityCommand(
-                "Intensity correction for DWI image",
-                inFile=dwi_input,
-                maskFile=dwi_mask,
-                intensity=DWI_INTENSITY,
-                output=dwi_matchwm,
-                )
-        pb.ANTSWarpCommand.make_from_registration(
-                "Warp atlas image to subject space using  warp",
-                moving=atlas_img,
-                reference=subj_final_img,
-                output_filename=dataset.get(subj=subj, modality='atlas', feature='img', modifiers='_in_subject'),
-                registration=forward_reg)
+    downsampled_atlas_label_in_sub = pb.NiiToolsDownsampleCommand(
+            "Downsample atlas labels in subject space",
+            input=dataset.get(subj=subj, modality='flair', feature='atlas_labels', modifiers='_in_subject_seg'),
+            output=dataset.get(subj=subj, modality='flair', feature='pipeline', modifiers='_atlas_labels')
+            )
 
-        # threshold_segmentation_dwi = pb.NiiToolsMaskedThresholdCommand(
-        #         "Threshold segmentation for stroke",
-        #         infile=dwi_matchwm,
-        #         threshold=STROKE_THRESHOLD,
-        #         output=basic_threshold_segmentation_stroke,
-        #         label=dwi_seg,
-        #         direction='greater',
-        #         labels=[2,41],
-        #         )
+    pb.ANTSWarpCommand.make_from_registration(
+            "Warp atlas image to subject space using  warp",
+            moving=atlas_img,
+            reference=subj_final_img,
+            output_filename=dataset.get(subj=subj, modality='flair', feature='atlas_img', modifiers='_in_subject'),
+            registration=forward_reg)
 
-        # threshold_segmentation_dwi_count = pb.NiiToolsMaskedThresholdCountCommand(
-        #         "Threshold segmentation for stroke computation",
-        #         infile=dwi_matchwm,
-        #         threshold=STROKE_THRESHOLD,
-        #         output=dataset.get(subj=subj, modality='other', feature='stroke_raw_threshold_seg', modifiers='', extension='.txt'),
-        #         label=dwi_seg,
-        #         direction='greater',
-        #         units='mm',
-        #         labels=[2,41],
-        #         )
-        threshold_segmentation = pb.NiiToolsMaskedThresholdCommand(
-                "Threshold segmentation",
-                infile=intensity_corr.outfiles[0],
-                threshold=WMH_THRESHOLD,
-                output=basic_threshold_segmentation_wmh,
-                label=label_warp.outfiles[0],
-                direction='greater',
-                labels=[2,41],
-                )
 
-        threshold_segmentation_count = pb.NiiToolsMaskedThresholdCountCommand(
-                "Threshold segmentation computation",
-                infile=intensity_corr.outfiles[0],
-                threshold=WMH_THRESHOLD,
-                output=dataset.get(subj=subj, modality='other', feature='wmh_raw_threshold_seg', modifiers='', extension='.txt'),
-                label=label_warp.outfiles[0],
-                direction='greater',
-                units='mm',
-                labels=[2,41],
-                )
-
-        threshold_seg_to_atlas = pb.ANTSWarpCommand.make_from_registration(
-                "Warp threshold segmentation to atlas space",
-                moving=basic_threshold_segmentation_wmh,
-                reference=atlas_img,
-                registration=forward_reg,
-                output_filename=dataset.get(subj=subj, modality='wmh_threshold_seg', feature='in_atlas', modifiers=''),
-                inversion='inverse')
-
-        filename = os.path.basename(label_warp.outfiles[0]).split('.')[0]
+    filename = os.path.basename(label_warp.outfiles[0]).split('.')[0]
 
     for path in [os.path.join(BASE,subj,'images'),
             os.path.join(BASE,subj,'images','reg'),
@@ -286,6 +201,6 @@ if __name__ == '__main__':
 
     ###
     log_folder = dataset.get_log_folder(subj=subj)
-    pb.Command.generate_code_from_datasets([dataset, atlas], log_folder, subj, sge=True,
+    pb.Command.generate_code_from_datasets([dataset, atlas], log_folder, subj, sge=False,
             wait_time=0, tracker=tracker)
 
