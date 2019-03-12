@@ -10,5 +10,5 @@ export PYTHONPATH=${pipebuilder_path}:$DIR/../:$PYTHONPATH
 
 for subj in $subjectlist; do
     echo $subj
-    python $DIR/../stroke_processing/registration/flairpipe.py ${subj} 9.0 0.2 ${processing_root}/data/${site}/
+    python $DIR/../stroke_processing/registration/flairpipe.py ${subj} 3.0 0.1 ${processing_root}/data/${site}/
 done
