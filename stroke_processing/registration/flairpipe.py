@@ -93,21 +93,15 @@ if __name__ == '__main__':
     atlas_img = os.path.join(ATLAS_BASE, flair_atlas)
 
     modifiers = ''
-    mask = dataset.get(subj=subj, modality=mod, feature='img', modifiers=modifiers+'_brainmask')
     neuronss = pb.custom.NeuronSSCommand(
             "Brain extraction with NeuronSS",
             input=flair_input,
             output=dataset.get(subj=subj, modality=mod, feature='img', modifiers=modifiers+'_brain'),
-            out_mask=mask)
-    modifiers += '_brain'
-
-    intensity_corr = pb.custom.IntresCommand(
-            "Intensity correction for flair image",
-            input=dataset.get(subj=subj, modality=mod, feature='img', modifiers=modifiers),
-            output=dataset.get(subj=subj, modality=mod, feature='img', modifiers=modifiers + '_matchwm'),
-            maskFile=mask,
-            )
-    modifiers += '_matchwm'
+            out_mask=dataset.get(subj=subj, modality=mod, feature='img', modifiers=modifiers+'_brainmask_01'), 
+            out_intres=dataset.get(subj=subj, modality=mod, feature='img', modifiers=modifiers + '_brain_matchwm'),
+            out_gmwm_mask=dataset.get(subj=subj, modality=mod, feature='img', modifiers=modifiers + '_gmwm_mask'),
+            out_refined_mask=dataset.get(subj=subj, modality=mod, feature='img', modifiers=modifiers+'_brainmask_02'))
+    modifiers += '_brain_matchwm'
     
     upsample = pb.NiiToolsUpsampleCommand(
                  "Upsample flair image",
@@ -134,11 +128,6 @@ if __name__ == '__main__':
             fixed=subj_final_img,
             output_folder=os.path.join(dataset.get_folder(subj=subj), 'reg'),
             output_prefix=os.path.join(dataset.get_folder(subj=subj), 'reg', reg_file_prefix),
-            transformation='Diff',
-            histogrammatching=0,
-            metric='CC',
-            radiusBins=4,
-            regularization='Gauss[%0.3f,%0.3f]' % (regularization,regularization2),
             method='affine',
             )
 
