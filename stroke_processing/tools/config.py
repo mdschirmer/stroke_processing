@@ -1,8 +1,8 @@
 import os
-import ConfigParser
+import configparser
 
 PWD = os.path.dirname(__file__)
 
-config = ConfigParser.ConfigParser()
+config = configparser.ConfigParser()
 config.read(os.path.join(PWD, '..', '..', 'stroke.cfg'))
 

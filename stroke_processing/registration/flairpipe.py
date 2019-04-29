@@ -6,15 +6,11 @@ import pipebuilder as pb
 from pipebuilder import tracking
 import pipebuilder.custom
 
+import pdb
+import copy
+
 from stroke_processing.tools import config
 cwd = os.path.dirname(os.path.abspath(__file__))
-
-ATLAS_MODALITY = 't1'
-DWI_INTENSITY = '210'
-
-WMH_THRESHOLD = 430
-STROKE_THRESHOLD = 1
-STROKE_THRESHOLD = 1
 
 CLOBBER_EXISTING_OUTPUTS = False
 
@@ -22,6 +18,10 @@ PROCESSING_ROOT = config.config.get('subject_data', 'processing_root')
 
 ATLAS_BASE = config.config.get('subject_data', 'atlas_base')
 flair_atlas = config.config.get('subject_data', 'flair_atlas')
+
+ncerebro_base = os.path.dirname(os.path.dirname(config.config.get('Binaries', 'nCEREBRO')))
+cerebro_atlas = os.path.join(ncerebro_base, "fixtures","iso_flair_template_intres_brain.nii.gz")
+cerebro_atlas_affine = os.path.join(ncerebro_base, "fixtures","new_to_old0GenericAffine.mat")
 
 
 def check_fluid_attenuation(input_filename, seg_filename, output_filename):
@@ -61,11 +61,8 @@ if __name__ == '__main__':
     #############################
 
     BASE = os.path.join(PROCESSING_ROOT, data_subfolder)
-    print(BASE)
     ## Atlas
-
     atlas = pb.Dataset(ATLAS_BASE, flair_atlas, None)
-    buckner = pb.Dataset(ATLAS_BASE, 'buckner61{feature}{extension}', None)
 
     ## Subject data
     dataset = pb.Dataset(
@@ -93,8 +90,8 @@ if __name__ == '__main__':
     atlas_img = os.path.join(ATLAS_BASE, flair_atlas)
 
     modifiers = ''
-    neuronss = pb.custom.NeuronSSCommand(
-            "Brain extraction with NeuronSS",
+    neuronbe = pb.custom.NeuronBECommand(
+            "Brain extraction with NeuronBE",
             input=flair_input,
             output=dataset.get(subj=subj, modality=mod, feature='img', modifiers=modifiers+'_brain'),
             out_mask=dataset.get(subj=subj, modality=mod, feature='img', modifiers=modifiers+'_brainmask_01'), 
@@ -135,61 +132,70 @@ if __name__ == '__main__':
             "Warp subject image to atlas space using warp",
             moving=subj_final_img,
             reference=atlas_img,
-            output_filename=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_in_atlas_affine'),
+            output_filename=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_in_atlas'),
             registration=forward_reg,
             inversion='inverse',
             )
-    affine_img = dataset.get(subj=subj, modality=mod, feature='img', modifiers='_in_atlas_affine')
 
-#    forward_reg = pb.ANTSCommand(
-#            "Register label-blurred flair atlas to subject",
-#            moving=atlas_img,
-#            fixed=affine_img,
-#            output_folder=os.path.join(dataset.get_folder(subj=subj), 'reg'),
-#            output_prefix=os.path.join(dataset.get_folder(subj=subj), 'reg', reg_file_prefix),
-#            transformation='Diff',
-#            histogrammatching=0,
-#            metric='CC',
-#            radiusBins=4,
-#            regularization='Gauss[%0.3f,%0.3f]' % (regularization,regularization2),
-#            method='nonlinear',
-#            nonlinear_iterations="401x401x401",
-#            )
+    ############################
+    # Segmentation
+    ############################
 
-#    pb.ANTSWarpCommand.make_from_registration(
-#            "Warp subject image to atlas space using warp",
-#            moving=affine_img,
-#            reference=atlas_img,
-#            output_filename=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_in_atlas_nonlinear'),
-#            registration=forward_reg,
-#            inversion='inverse',
-#            )
+    # initialize registration from atlas to the one cerebro was trained on
+    caa_reg = copy.copy(forward_reg)
+    caa_reg.forward_warp_string = cerebro_atlas_affine
+    caa_reg.backward_warp_string = '-i ' + cerebro_atlas_affine
+    tmp = list(caa_reg.inputs)
+    tmp[1] = cerebro_atlas
+    tmp[2] = os.path.join(ATLAS_BASE,flair_atlas)
+    caa_reg.inputs = set(tmp)
+    caa_reg.outfiles = [cerebro_atlas_affine]
+    caa_reg.output_prefix = cerebro_atlas_affine.split('Affine')[0]
 
-    # label_warp = pb.ANTSWarpCommand.make_from_registration(
-    #         "Warp atlas labels to subject space using  warp",
-    #         moving=buckner.get_original(feature='_seg'),
-    #         reference=subj_final_img,
-    #         registration=forward_reg,
-    #         output_filename=dataset.get(subj=subj, modality=mod, feature='atlas_labels', modifiers='_in_subject_seg'),
-    #         useNN=True,
-    #         )
+    pb.ANTSWarpCommand.make_from_registration(
+            "Warp subject in atlas image to original atlas space in which nCerebro was trained",
+            moving=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_in_atlas'),
+            reference=cerebro_atlas,
+            output_filename=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_in_orig_atlas'),
+            registration=caa_reg,
+            )
 
-    # downsampled_atlas_label_in_sub = pb.NiiToolsDownsampleCommand(
-    #         "Downsample atlas labels in subject space",
-    #         input=dataset.get(subj=subj, modality=mod, feature='atlas_labels', modifiers='_in_subject_seg'),
-    #         output=dataset.get(subj=subj, modality=mod, feature='pipeline', modifiers='_atlas_labels'),
-    #         zoom_values_file=dataset.get_pickle_file(subj=subj, modality=mod)
-    #         )
+    cerebro = pb.custom.nCerebroCommand(
+            "Segment WMH with cerebro",
+            input=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_in_orig_atlas'),
+            output=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_leuk_in_orig_atlas'))
 
-    # pb.ANTSWarpCommand.make_from_registration(
-    #         "Warp atlas image to subject space using  warp",
-    #         moving=atlas_img,
-    #         reference=subj_final_img,
-    #         output_filename=dataset.get(subj=subj, modality=mod, feature='atlas_img', modifiers='_in_subject'),
-    #         registration=forward_reg)
+    pb.ANTSWarpCommand.make_from_registration(
+            "Warp subject in orig atlas image to atlas space using warp",
+            moving=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_leuk_in_orig_atlas'),
+            reference=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_in_atlas'),
+            output_filename=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_leuk_in_atlas'),
+            registration=caa_reg,
+            inversion='inverse',
+            )
 
+    pb.ANTSWarpCommand.make_from_registration(
+            "Warp leuk seg to upsampled img space using warp",
+            moving=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_leuk_in_atlas'),
+            reference=subj_final_img,
+            output_filename=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_leuk_in_upsampled_subject'),
+            registration=forward_reg,
+            )
 
-    # filename = os.path.basename(label_warp.outfiles[0]).split('.')[0]
+    pb.NiiToolsDownsampleCommand(
+             "Downsample flair image",
+             input=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_leuk_in_upsampled_subject'),
+             output=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_leuk_in_subject'),
+             zoom_values_file=dataset.get_pickle_file(subj=subj, modality=mod)
+             )
+
+    pb.NiiToolsBinarize(
+    			"Binarize image",
+    			input=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_leuk_in_subject'),
+                output=dataset.get(subj=subj, modality=mod, feature='img', modifiers='_leuk_seg_bin'),
+                threshold=0.5
+    			)
+
 
     for path in [os.path.join(BASE,subj,'images'),
             os.path.join(BASE,subj,'images','reg'),

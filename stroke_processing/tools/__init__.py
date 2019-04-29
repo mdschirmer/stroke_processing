@@ -1,1 +1,1 @@
-import config
+from stroke_processing.tools import config

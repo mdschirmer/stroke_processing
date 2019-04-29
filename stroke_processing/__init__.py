@@ -1,2 +1,2 @@
-import registration
-import tools
+import stroke_processing.registration
+import stroke_processing.tools
